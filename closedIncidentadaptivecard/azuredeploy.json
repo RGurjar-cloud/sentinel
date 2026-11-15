@@ -1,0 +1,985 @@
+{
+    "$schema":  "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion":  "1.0.0.0",
+    "metadata":  {
+                     "description":  "Microsoft Sentinel closed-incident Teams notification. Authorize Teams and configure permissions before enabling."
+                 },
+    "parameters":  {
+                       "logicAppName":  {
+                                            "maxLength":  64,
+                                            "defaultValue":  "sentinel-closed-incident-teams",
+                                            "minLength":  1,
+                                            "type":  "string",
+                                            "metadata":  {
+                                                             "description":  "Name of the new Consumption Logic App. Use a unique name to avoid updating an existing workflow or connection."
+                                                         }
+                                        },
+                       "location":  {
+                                        "defaultValue":  "[resourceGroup().location]",
+                                        "type":  "string",
+                                        "metadata":  {
+                                                         "description":  "Azure public-cloud region supporting Logic Apps, Sentinel connector, and Teams connector."
+                                                     }
+                                    },
+                       "logAnalyticsWorkspaceResourceId":  {
+                                                               "minLength":  1,
+                                                               "type":  "string",
+                                                               "metadata":  {
+                                                                                "description":  "Full ARM resource ID of the existing Sentinel-enabled Log Analytics workspace, not its Customer ID. The deployment reads its Customer ID."
+                                                                            }
+                                                           },
+                       "teamsTeamId":  {
+                                           "maxLength":  36,
+                                           "minLength":  36,
+                                           "type":  "string",
+                                           "metadata":  {
+                                                            "description":  "Destination team GUID (groupId in the Teams channel link)."
+                                                        }
+                                       },
+                       "teamsChannelId":  {
+                                              "minLength":  1,
+                                              "type":  "string",
+                                              "metadata":  {
+                                                               "description":  "Destination standard-channel ID, for example 19:...@thread.tacv2. URL-decode the ID if copied from a link."
+                                                           }
+                                          },
+                       "displayTimeZone":  {
+                                               "defaultValue":  "UTC",
+                                               "minLength":  1,
+                                               "type":  "string",
+                                               "metadata":  {
+                                                                "description":  "Windows time-zone ID, for example UTC or India Standard Time."
+                                                            }
+                                           },
+                       "displayTimeZoneLabel":  {
+                                                    "defaultValue":  "UTC",
+                                                    "minLength":  1,
+                                                    "type":  "string",
+                                                    "metadata":  {
+                                                                     "description":  "Display label matching displayTimeZone, for example UTC or IST. This label does not perform time conversion."
+                                                                 }
+                                                },
+                       "workflowState":  {
+                                             "defaultValue":  "Disabled",
+                                             "allowedValues":  [
+                                                                   "Disabled",
+                                                                   "Enabled"
+                                                               ],
+                                             "type":  "string",
+                                             "metadata":  {
+                                                              "description":  "Keep Disabled until RBAC and Teams authorization are complete. Redeploying reapplies this state."
+                                                          }
+                                         }
+                   },
+    "variables":  {
+                      "sentinelConnectionName":  "[concat(parameters(\u0027logicAppName\u0027), \u0027-sentinel\u0027)]",
+                      "teamsConnectionName":  "[concat(parameters(\u0027logicAppName\u0027), \u0027-teams\u0027)]",
+                      "sentinelManagedApiId":  "[subscriptionResourceId(\u0027Microsoft.Web/locations/managedApis\u0027, parameters(\u0027location\u0027), \u0027azuresentinel\u0027)]",
+                      "teamsManagedApiId":  "[subscriptionResourceId(\u0027Microsoft.Web/locations/managedApis\u0027, parameters(\u0027location\u0027), \u0027teams\u0027)]"
+                  },
+    "resources":  [
+                      {
+                          "type":  "Microsoft.Web/connections",
+                          "apiVersion":  "2016-06-01",
+                          "name":  "[variables(\u0027sentinelConnectionName\u0027)]",
+                          "location":  "[parameters(\u0027location\u0027)]",
+                          "kind":  "V1",
+                          "properties":  {
+                                             "api":  {
+                                                         "id":  "[variables(\u0027sentinelManagedApiId\u0027)]"
+                                                     },
+                                             "parameterValueType":  "Alternative",
+                                             "displayName":  "[variables(\u0027sentinelConnectionName\u0027)]"
+                                         }
+                      },
+                      {
+                          "type":  "Microsoft.Web/connections",
+                          "apiVersion":  "2016-06-01",
+                          "name":  "[variables(\u0027teamsConnectionName\u0027)]",
+                          "location":  "[parameters(\u0027location\u0027)]",
+                          "kind":  "V1",
+                          "properties":  {
+                                             "displayName":  "[variables(\u0027teamsConnectionName\u0027)]",
+                                             "api":  {
+                                                         "id":  "[variables(\u0027teamsManagedApiId\u0027)]"
+                                                     }
+                                         }
+                      },
+                      {
+                          "type":  "Microsoft.Logic/workflows",
+                          "apiVersion":  "2019-05-01",
+                          "name":  "[parameters(\u0027logicAppName\u0027)]",
+                          "location":  "[parameters(\u0027location\u0027)]",
+                          "identity":  {
+                                           "type":  "SystemAssigned"
+                                       },
+                          "tags":  {
+                                       "solution":  "Sentinel-Closed-Incident-Teams"
+                                   },
+                          "dependsOn":  [
+                                            "[resourceId(\u0027Microsoft.Web/connections\u0027, variables(\u0027sentinelConnectionName\u0027))]",
+                                            "[resourceId(\u0027Microsoft.Web/connections\u0027, variables(\u0027teamsConnectionName\u0027))]"
+                                        ],
+                          "properties":  {
+                                             "state":  "[parameters(\u0027workflowState\u0027)]",
+                                             "definition":  {
+                                                                "metadata":  {
+                                                                                 "notes":  {
+                                                                                               "purpose":  "Post a concise management-facing Microsoft Sentinel closed-incident summary, with investigation evidence available on demand.",
+                                                                                               "fieldSources":  "Title, severity, owner, classification, reason, classificationComment and incident URL come from the trigger snapshot. Current comments come from the comments API. ClosedTime and reported closure source come from one SecurityIncident query.",
+                                                                                               "workspace":  "The deployment resolves the Customer ID from the existing logAnalyticsWorkspaceResourceId resource. This must be the workspace that supplies the triggering incidents.",
+                                                                                               "history":  "Queries retained logs from incident creation, not a fixed seven-day window. Matches the triggering modification timestamp; missing or delayed history is explicitly reported, without polling or substituting an earlier closure. Query results contain raw datetimes; display formatting is done only in Prepare_card_data.",
+                                                                                               "comments":  "The API is paginated by the HTTP action. The card previews the three newest comments. A best-effort expression removes common paragraph, line-break, and formatting tags before Teams rendering.",
+                                                                                               "permissions":  "System-assigned identity: Microsoft Sentinel Reader and Log Analytics Reader at workspace scope. Teams uses a separately authorized delegated user connection. See README.md.",
+                                                                                               "cardMaintenance":  "The adaptive card is embedded in Build_adaptive_card.inputs. No separate adaptivecard.json file is required.",
+                                                                                               "validation":  "Test this definition in Azure after saving. Local validation does not execute KQL or the managed HTTP pagination engine.",
+                                                                                               "cardAudience":  "Management view shows outcome, classification, closure summary, owner, closure time, readable lifecycle duration, and key volume metrics. Technical identifiers, data-quality notes, and analyst comments are collapsed by default.",
+                                                                                               "dataQuality":  "No business impact, root cause, or remediation is invented. A short or generic classification comment is explicitly flagged as incomplete for management reporting.",
+                                                                                               "timeDisplay":  "Management timestamps use the configurable displayTimeZone and displayTimeZoneLabel parameters. UTC timestamps remain in the collapsed audit section.",
+                                                                                               "privacy":  "Hard-coded tenant name and tenant ID were removed from the card. Workspace, incident number, and the incident link provide sufficient routing context for the management notification."
+                                                                                           }
+                                                                             },
+                                                                "$schema":  "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                                                                "contentVersion":  "1.0.0.0",
+                                                                "triggers":  {
+                                                                                 "Microsoft_Sentinel_incident":  {
+                                                                                                                     "type":  "ApiConnectionWebhook",
+                                                                                                                     "inputs":  {
+                                                                                                                                    "host":  {
+                                                                                                                                                 "connection":  {
+                                                                                                                                                                    "name":  "@parameters(\u0027$connections\u0027)[\u0027azuresentinel\u0027][\u0027connectionId\u0027]"
+                                                                                                                                                                }
+                                                                                                                                             },
+                                                                                                                                    "body":  {
+                                                                                                                                                 "callback_url":  "@{listCallbackUrl()}"
+                                                                                                                                             },
+                                                                                                                                    "path":  "/incident-creation"
+                                                                                                                                },
+                                                                                                                     "conditions":  [
+                                                                                                                                        {
+                                                                                                                                            "expression":  "@equals(triggerBody()?[\u0027object\u0027]?[\u0027properties\u0027]?[\u0027status\u0027], \u0027Closed\u0027)"
+                                                                                                                                        }
+                                                                                                                                    ]
+                                                                                                                 }
+                                                                             },
+                                                                "actions":  {
+                                                                                "Get_comments":  {
+                                                                                                     "type":  "Http",
+                                                                                                     "inputs":  {
+                                                                                                                    "uri":  "@concat(\u0027https://management.azure.com\u0027, triggerBody()?[\u0027object\u0027]?[\u0027id\u0027], \u0027/comments?api-version=2025-09-01\u0027)",
+                                                                                                                    "method":  "GET",
+                                                                                                                    "authentication":  {
+                                                                                                                                           "type":  "ManagedServiceIdentity",
+                                                                                                                                           "audience":  "https://management.azure.com/"
+                                                                                                                                       }
+                                                                                                                },
+                                                                                                     "runtimeConfiguration":  {
+                                                                                                                                  "paginationPolicy":  {
+                                                                                                                                                           "minimumItemCount":  100000
+                                                                                                                                                       }
+                                                                                                                              },
+                                                                                                     "runAfter":  {
+
+                                                                                                                  }
+                                                                                                 },
+                                                                                "Query_closure_data":  {
+                                                                                                           "type":  "Http",
+                                                                                                           "inputs":  {
+                                                                                                                          "uri":  "@concat(\u0027https://api.loganalytics.azure.com/v1/workspaces/\u0027, parameters(\u0027logAnalyticsWorkspaceId\u0027), \u0027/query\u0027)",
+                                                                                                                          "method":  "POST",
+                                                                                                                          "headers":  {
+                                                                                                                                          "Content-Type":  "application/json"
+                                                                                                                                      },
+                                                                                                                          "body":  {
+                                                                                                                                       "query":  "let triggerUpdate = datetime(@{triggerBody()?[\u0027object\u0027]?[\u0027properties\u0027]?[\u0027lastModifiedTimeUtc\u0027]});\nlet incidentHistory = materialize(SecurityIncident\n| where TimeGenerated \u003e= datetime(@{triggerBody()?[\u0027object\u0027]?[\u0027properties\u0027]?[\u0027createdTimeUtc\u0027]})\n| where IncidentName =~ tostring(dynamic(@{string(createArray(triggerBody()?[\u0027object\u0027]?[\u0027name\u0027]))})[0])\n| where LastModifiedTime \u003c= triggerUpdate\n| summarize arg_max(TimeGenerated, *) by LastModifiedTime);\nlet triggerSnapshot = incidentHistory\n| where LastModifiedTime == triggerUpdate\n| where Status == \u0027Closed\u0027 and isnotnull(ClosedTime);\nlet closureSources = incidentHistory\n| where Status == \u0027Closed\u0027 and isnotnull(ClosedTime)\n| summarize arg_min(LastModifiedTime, ModifiedBy) by ClosedTime\n| project ClosedTime, FirstClosedUpdate = LastModifiedTime, ReportedClosedBy = ModifiedBy;\ntriggerSnapshot\n| join kind=leftouter closureSources on ClosedTime\n| project ClosedTime, ReportedClosedBy, DurationSeconds = datetime_diff(\u0027second\u0027, ClosedTime, CreatedTime), FirstClosedUpdate"
+                                                                                                                                   },
+                                                                                                                          "authentication":  {
+                                                                                                                                                 "type":  "ManagedServiceIdentity",
+                                                                                                                                                 "audience":  "https://api.loganalytics.io"
+                                                                                                                                             }
+                                                                                                                      },
+                                                                                                           "runAfter":  {
+
+                                                                                                                        }
+                                                                                                       },
+                                                                                "Parse_fetched_data":  {
+                                                                                                           "type":  "ParseJson",
+                                                                                                           "inputs":  {
+                                                                                                                          "content":  {
+                                                                                                                                          "incident":  "@triggerBody()?[\u0027object\u0027]",
+                                                                                                                                          "comments":  "@body(\u0027Get_comments\u0027)",
+                                                                                                                                          "closure":  "@body(\u0027Query_closure_data\u0027)"
+                                                                                                                                      },
+                                                                                                                          "schema":  {
+                                                                                                                                         "type":  "object",
+                                                                                                                                         "required":  [
+                                                                                                                                                          "incident",
+                                                                                                                                                          "comments",
+                                                                                                                                                          "closure"
+                                                                                                                                                      ],
+                                                                                                                                         "properties":  {
+                                                                                                                                                            "incident":  {
+                                                                                                                                                                             "type":  "object",
+                                                                                                                                                                             "required":  [
+                                                                                                                                                                                              "name",
+                                                                                                                                                                                              "properties"
+                                                                                                                                                                                          ],
+                                                                                                                                                                             "properties":  {
+                                                                                                                                                                                                "name":  {
+                                                                                                                                                                                                             "type":  "string"
+                                                                                                                                                                                                         },
+                                                                                                                                                                                                "properties":  {
+                                                                                                                                                                                                                   "type":  "object",
+                                                                                                                                                                                                                   "required":  [
+                                                                                                                                                                                                                                    "title",
+                                                                                                                                                                                                                                    "incidentNumber",
+                                                                                                                                                                                                                                    "severity",
+                                                                                                                                                                                                                                    "status",
+                                                                                                                                                                                                                                    "createdTimeUtc",
+                                                                                                                                                                                                                                    "lastModifiedTimeUtc",
+                                                                                                                                                                                                                                    "incidentUrl"
+                                                                                                                                                                                                                                ],
+                                                                                                                                                                                                                   "properties":  {
+                                                                                                                                                                                                                                      "title":  {
+                                                                                                                                                                                                                                                    "type":  "string"
+                                                                                                                                                                                                                                                },
+                                                                                                                                                                                                                                      "incidentNumber":  {
+                                                                                                                                                                                                                                                             "type":  "integer"
+                                                                                                                                                                                                                                                         },
+                                                                                                                                                                                                                                      "severity":  {
+                                                                                                                                                                                                                                                       "type":  "string"
+                                                                                                                                                                                                                                                   },
+                                                                                                                                                                                                                                      "status":  {
+                                                                                                                                                                                                                                                     "enum":  [
+                                                                                                                                                                                                                                                                  "Closed"
+                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                 },
+                                                                                                                                                                                                                                      "createdTimeUtc":  {
+                                                                                                                                                                                                                                                             "type":  "string",
+                                                                                                                                                                                                                                                             "format":  "date-time"
+                                                                                                                                                                                                                                                         },
+                                                                                                                                                                                                                                      "lastModifiedTimeUtc":  {
+                                                                                                                                                                                                                                                                  "type":  "string",
+                                                                                                                                                                                                                                                                  "format":  "date-time"
+                                                                                                                                                                                                                                                              },
+                                                                                                                                                                                                                                      "incidentUrl":  {
+                                                                                                                                                                                                                                                          "type":  "string",
+                                                                                                                                                                                                                                                          "minLength":  1
+                                                                                                                                                                                                                                                      }
+                                                                                                                                                                                                                                  }
+                                                                                                                                                                                                               }
+                                                                                                                                                                                            }
+                                                                                                                                                                         },
+                                                                                                                                                            "comments":  {
+                                                                                                                                                                             "type":  "object",
+                                                                                                                                                                             "required":  [
+                                                                                                                                                                                              "value"
+                                                                                                                                                                                          ],
+                                                                                                                                                                             "properties":  {
+                                                                                                                                                                                                "value":  {
+                                                                                                                                                                                                              "type":  "array",
+                                                                                                                                                                                                              "items":  {
+                                                                                                                                                                                                                            "type":  "object",
+                                                                                                                                                                                                                            "required":  [
+                                                                                                                                                                                                                                             "properties"
+                                                                                                                                                                                                                                         ],
+                                                                                                                                                                                                                            "properties":  {
+                                                                                                                                                                                                                                               "properties":  {
+                                                                                                                                                                                                                                                                  "type":  "object",
+                                                                                                                                                                                                                                                                  "required":  [
+                                                                                                                                                                                                                                                                                   "message",
+                                                                                                                                                                                                                                                                                   "createdTimeUtc"
+                                                                                                                                                                                                                                                                               ],
+                                                                                                                                                                                                                                                                  "properties":  {
+                                                                                                                                                                                                                                                                                     "message":  {
+                                                                                                                                                                                                                                                                                                     "type":  "string"
+                                                                                                                                                                                                                                                                                                 },
+                                                                                                                                                                                                                                                                                     "createdTimeUtc":  {
+                                                                                                                                                                                                                                                                                                            "type":  "string",
+                                                                                                                                                                                                                                                                                                            "format":  "date-time"
+                                                                                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                                                                 }
+                                                                                                                                                                                                                                                              }
+                                                                                                                                                                                                                                           }
+                                                                                                                                                                                                                        }
+                                                                                                                                                                                                          }
+                                                                                                                                                                                            }
+                                                                                                                                                                         },
+                                                                                                                                                            "closure":  {
+                                                                                                                                                                            "type":  "object",
+                                                                                                                                                                            "required":  [
+                                                                                                                                                                                             "tables"
+                                                                                                                                                                                         ],
+                                                                                                                                                                            "properties":  {
+                                                                                                                                                                                               "error":  {
+                                                                                                                                                                                                             "type":  "null"
+                                                                                                                                                                                                         },
+                                                                                                                                                                                               "tables":  {
+                                                                                                                                                                                                              "type":  "array",
+                                                                                                                                                                                                              "minItems":  1,
+                                                                                                                                                                                                              "maxItems":  1,
+                                                                                                                                                                                                              "items":  {
+                                                                                                                                                                                                                            "type":  "object",
+                                                                                                                                                                                                                            "required":  [
+                                                                                                                                                                                                                                             "rows"
+                                                                                                                                                                                                                                         ],
+                                                                                                                                                                                                                            "properties":  {
+                                                                                                                                                                                                                                               "rows":  {
+                                                                                                                                                                                                                                                            "type":  "array",
+                                                                                                                                                                                                                                                            "maxItems":  1,
+                                                                                                                                                                                                                                                            "items":  {
+                                                                                                                                                                                                                                                                          "type":  "array",
+                                                                                                                                                                                                                                                                          "minItems":  4,
+                                                                                                                                                                                                                                                                          "maxItems":  4,
+                                                                                                                                                                                                                                                                          "items":  [
+                                                                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                                                                            "type":  "string",
+                                                                                                                                                                                                                                                                                            "format":  "date-time"
+                                                                                                                                                                                                                                                                                        },
+                                                                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                                                                            "type":  "string"
+                                                                                                                                                                                                                                                                                        },
+                                                                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                                                                            "type":  [
+                                                                                                                                                                                                                                                                                                         "number",
+                                                                                                                                                                                                                                                                                                         "null"
+                                                                                                                                                                                                                                                                                                     ]
+                                                                                                                                                                                                                                                                                        },
+                                                                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                                                                            "type":  "string",
+                                                                                                                                                                                                                                                                                            "format":  "date-time"
+                                                                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                                      }
+                                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                           }
+                                                                                                                                                                                                                        }
+                                                                                                                                                                                                          }
+                                                                                                                                                                                           }
+                                                                                                                                                                        }
+                                                                                                                                                        }
+                                                                                                                                     }
+                                                                                                                      },
+                                                                                                           "runAfter":  {
+                                                                                                                            "Get_comments":  [
+                                                                                                                                                 "Succeeded"
+                                                                                                                                             ],
+                                                                                                                            "Query_closure_data":  [
+                                                                                                                                                       "Succeeded"
+                                                                                                                                                   ]
+                                                                                                                        }
+                                                                                                       },
+                                                                                "Normalize_comments":  {
+                                                                                                           "type":  "Select",
+                                                                                                           "inputs":  {
+                                                                                                                          "from":  "@body(\u0027Parse_fetched_data\u0027)?[\u0027comments\u0027]?[\u0027value\u0027]",
+                                                                                                                          "select":  {
+                                                                                                                                         "sortKey":  "@formatDateTime(item()?[\u0027properties\u0027]?[\u0027createdTimeUtc\u0027], \u0027yyyyMMddHHmmssfffffff\u0027)",
+                                                                                                                                         "createdTime":  "@item()?[\u0027properties\u0027]?[\u0027createdTimeUtc\u0027]",
+                                                                                                                                         "author":  "@if(empty(item()?[\u0027properties\u0027]?[\u0027author\u0027]?[\u0027name\u0027]), if(empty(item()?[\u0027properties\u0027]?[\u0027author\u0027]?[\u0027userPrincipalName\u0027]), \u0027Unknown author\u0027, take(item()?[\u0027properties\u0027]?[\u0027author\u0027]?[\u0027userPrincipalName\u0027], 80)), take(item()?[\u0027properties\u0027]?[\u0027author\u0027]?[\u0027name\u0027], 80))",
+                                                                                                                                         "message":  "@trim(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(coalesce(item()?[\u0027properties\u0027]?[\u0027message\u0027], \u0027\u0027), \u0027\u003cbr /\u003e\u0027, decodeUriComponent(\u0027%0A\u0027)), \u0027\u003cbr/\u003e\u0027, decodeUriComponent(\u0027%0A\u0027)), \u0027\u003cbr\u003e\u0027, decodeUriComponent(\u0027%0A\u0027)), \u0027\u003c/p\u003e\u0027, decodeUriComponent(\u0027%0A\u0027)), \u0027\u003cp/\u003e\u0027, decodeUriComponent(\u0027%0A\u0027)), \u0027\u003cp\u003e\u0027, \u0027\u0027), \u0027\u003c/div\u003e\u0027, decodeUriComponent(\u0027%0A\u0027)), \u0027\u003cdiv\u003e\u0027, \u0027\u0027), \u0027\u003cstrong\u003e\u0027, \u0027\u0027), \u0027\u003c/strong\u003e\u0027, \u0027\u0027), \u0027\u003cb\u003e\u0027, \u0027\u0027), \u0027\u003c/b\u003e\u0027, \u0027\u0027), \u0027\u003cem\u003e\u0027, \u0027\u0027), \u0027\u003c/em\u003e\u0027, \u0027\u0027), \u0027\u003ci\u003e\u0027, \u0027\u0027), \u0027\u003c/i\u003e\u0027, \u0027\u0027), \u0027\u003cul\u003e\u0027, \u0027\u0027), \u0027\u003c/ul\u003e\u0027, \u0027\u0027), \u0027\u003col\u003e\u0027, \u0027\u0027), \u0027\u003c/ol\u003e\u0027, \u0027\u0027), \u0027\u003cli\u003e\u0027, concat(\u0027• \u0027, \u0027\u0027)), \u0027\u003c/li\u003e\u0027, decodeUriComponent(\u0027%0A\u0027)), \u0027\u0026nbsp;\u0027, \u0027 \u0027), \u0027\u0026#160;\u0027, \u0027 \u0027), \u0027\u0026amp;\u0027, \u0027\u0026\u0027), \u0027\u0026lt;\u0027, \u0027\u003c\u0027), \u0027\u0026gt;\u0027, \u0027\u003e\u0027), \u0027\u0026quot;\u0027, \u0027\"\u0027), \u0027\u0026#39;\u0027, decodeUriComponent(\u0027%27\u0027)))"
+                                                                                                                                     }
+                                                                                                                      },
+                                                                                                           "runAfter":  {
+                                                                                                                            "Parse_fetched_data":  [
+                                                                                                                                                       "Succeeded"
+                                                                                                                                                   ]
+                                                                                                                        }
+                                                                                                       },
+                                                                                "Recent_comments":  {
+                                                                                                        "type":  "Compose",
+                                                                                                        "inputs":  "@if(empty(body(\u0027Normalize_comments\u0027)), json(\u0027[]\u0027), take(reverse(sort(body(\u0027Normalize_comments\u0027), \u0027sortKey\u0027)), 3))",
+                                                                                                        "runAfter":  {
+                                                                                                                         "Normalize_comments":  [
+                                                                                                                                                    "Succeeded"
+                                                                                                                                                ]
+                                                                                                                     }
+                                                                                                    },
+                                                                                "Prepare_card_data":  {
+                                                                                                          "type":  "Compose",
+                                                                                                          "inputs":  {
+                                                                                                                         "title":  "@take(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027title\u0027], 200)",
+                                                                                                                         "incidentNumber":  "@string(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027incidentNumber\u0027])",
+                                                                                                                         "incidentGuid":  "@body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027name\u0027]",
+                                                                                                                         "severity":  "@if(equals(toLower(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027severity\u0027]), \u0027high\u0027), \u0027High\u0027, if(equals(toLower(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027severity\u0027]), \u0027medium\u0027), \u0027Medium\u0027, if(equals(toLower(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027severity\u0027]), \u0027low\u0027), \u0027Low\u0027, if(equals(toLower(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027severity\u0027]), \u0027informational\u0027), \u0027Informational\u0027, take(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027severity\u0027], 30)))))",
+                                                                                                                         "severityColor":  "@if(equals(toLower(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027severity\u0027]), \u0027high\u0027), \u0027Attention\u0027, if(equals(toLower(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027severity\u0027]), \u0027medium\u0027), \u0027Warning\u0027, if(equals(toLower(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027severity\u0027]), \u0027low\u0027), \u0027Good\u0027, \u0027Accent\u0027)))",
+                                                                                                                         "workspaceName":  "@if(empty(triggerBody()?[\u0027workspaceInfo\u0027]?[\u0027WorkspaceName\u0027]), take(split(triggerBody()?[\u0027object\u0027]?[\u0027id\u0027], \u0027/\u0027)?[8], 120), take(triggerBody()?[\u0027workspaceInfo\u0027]?[\u0027WorkspaceName\u0027], 120))",
+                                                                                                                         "classification":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classification\u0027]), \u0027Not recorded\u0027, if(equals(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classification\u0027], \u0027TruePositive\u0027), \u0027True positive\u0027, if(equals(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classification\u0027], \u0027BenignPositive\u0027), \u0027Benign activity\u0027, if(equals(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classification\u0027], \u0027FalsePositive\u0027), \u0027False positive\u0027, if(equals(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classification\u0027], \u0027Undetermined\u0027), \u0027Undetermined\u0027, take(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classification\u0027], 80))))))",
+                                                                                                                         "reason":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationReason\u0027]), \u0027Not recorded\u0027, if(equals(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationReason\u0027], \u0027SuspiciousActivity\u0027), \u0027Suspicious activity\u0027, if(equals(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationReason\u0027], \u0027SuspiciousButExpected\u0027), \u0027Suspicious but expected\u0027, if(equals(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationReason\u0027], \u0027IncorrectAlertLogic\u0027), \u0027Incorrect alert logic\u0027, if(equals(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationReason\u0027], \u0027InaccurateData\u0027), \u0027Inaccurate data\u0027, if(equals(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationReason\u0027], \u0027NotApplicable\u0027), \u0027Not applicable\u0027, take(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationReason\u0027], 100)))))))",
+                                                                                                                         "managementSummary":  "@if(or(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027]), less(length(trim(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027])), 20), equals(toLower(trim(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027])), \u0027closed\u0027), equals(toLower(trim(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027])), \u0027incident closed\u0027)), \u0027No substantive closure summary was recorded. Add outcome, impact, containment or remediation, and validation before treating this as a complete management record.\u0027, take(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027], 900))",
+                                                                                                                         "summaryQuality":  "@if(or(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027]), less(length(trim(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027])), 20), equals(toLower(trim(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027])), \u0027closed\u0027), equals(toLower(trim(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027])), \u0027incident closed\u0027)), \u0027Management summary incomplete — the closure comment is empty or too generic.\u0027, \u0027Closure summary recorded in the incident.\u0027)",
+                                                                                                                         "summaryQualityColor":  "@if(or(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027]), less(length(trim(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027])), 20), equals(toLower(trim(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027])), \u0027closed\u0027), equals(toLower(trim(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027classificationComment\u0027])), \u0027incident closed\u0027)), \u0027Attention\u0027, \u0027Good\u0027)",
+                                                                                                                         "owner":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027owner\u0027]?[\u0027assignedTo\u0027]), \u0027Unassigned\u0027, take(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027owner\u0027]?[\u0027assignedTo\u0027], 100))",
+                                                                                                                         "description":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027description\u0027]), \u0027No incident description recorded.\u0027, take(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027description\u0027], 600))",
+                                                                                                                         "createdTimeLocal":  "@convertTimeZone(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027createdTimeUtc\u0027], \u0027UTC\u0027, parameters(\u0027displayTimeZone\u0027), \u0027dd MMM yyyy, HH:mm\u0027)",
+                                                                                                                         "createdTimeUtc":  "@formatDateTime(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027createdTimeUtc\u0027], \u0027yyyy-MM-dd HH:mm:ss\u0027)",
+                                                                                                                         "triggerTimeUtc":  "@formatDateTime(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027lastModifiedTimeUtc\u0027], \u0027yyyy-MM-dd HH:mm:ss.fff\u0027)",
+                                                                                                                         "alertCount":  "@if(equals(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027additionalData\u0027]?[\u0027alertsCount\u0027], null), \u0027Not supplied\u0027, string(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027additionalData\u0027]?[\u0027alertsCount\u0027]))",
+                                                                                                                         "commentCount":  "@string(length(body(\u0027Parse_fetched_data\u0027)?[\u0027comments\u0027]?[\u0027value\u0027]))",
+                                                                                                                         "closedTimeLocal":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027]), \u0027Unavailable\u0027, convertTimeZone(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[0], \u0027UTC\u0027, parameters(\u0027displayTimeZone\u0027), \u0027dd MMM yyyy, HH:mm\u0027))",
+                                                                                                                         "closedTimeUtc":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027]), \u0027Unavailable\u0027, formatDateTime(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[0], \u0027yyyy-MM-dd HH:mm:ss.fff\u0027))",
+                                                                                                                         "closedBy":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027]), \u0027Not available\u0027, if(empty(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[1]), \u0027Not recorded\u0027, take(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[1], 120)))",
+                                                                                                                         "firstLoggedUpdateUtc":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027]), \u0027Unavailable\u0027, formatDateTime(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[3], \u0027yyyy-MM-dd HH:mm:ss.fff\u0027))",
+                                                                                                                         "duration":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027]), \u0027Unavailable\u0027, if(equals(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[2], null), \u0027Unavailable\u0027, if(less(int(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[2]), 0), \u0027Unavailable - inconsistent timestamps\u0027, concat(if(greaterOrEquals(int(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[2]), 86400), concat(string(div(int(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[2]), 86400)), \u0027d \u0027), \u0027\u0027), if(greaterOrEquals(int(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[2]), 3600), concat(string(div(mod(int(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[2]), 86400), 3600)), \u0027h \u0027), \u0027\u0027), string(div(mod(int(first(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027])?[2]), 3600), 60)), \u0027m\u0027))))",
+                                                                                                                         "closureStatus":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027closure\u0027]?[\u0027tables\u0027]?[0]?[\u0027rows\u0027]), \u0027No exact retained SecurityIncident snapshot matched the triggering update. Closure time, source, and duration are therefore shown as unavailable.\u0027, \u0027Closure values matched the triggering update in retained SecurityIncident history.\u0027)",
+                                                                                                                         "commentsStatus":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027comments\u0027]?[\u0027value\u0027]), \u0027No analyst comments recorded.\u0027, concat(\u0027Latest \u0027, string(length(outputs(\u0027Recent_comments\u0027))), \u0027 of \u0027, string(length(body(\u0027Parse_fetched_data\u0027)?[\u0027comments\u0027]?[\u0027value\u0027])), \u0027 fetched comments, newest first.\u0027, if(greaterOrEquals(length(body(\u0027Parse_fetched_data\u0027)?[\u0027comments\u0027]?[\u0027value\u0027]), 100000), \u0027 Pagination threshold reached; more comments may exist.\u0027, \u0027\u0027)))",
+                                                                                                                         "incidentUrl":  "@if(empty(body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027additionalData\u0027]?[\u0027providerIncidentUrl\u0027]), body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027incidentUrl\u0027], body(\u0027Parse_fetched_data\u0027)?[\u0027incident\u0027]?[\u0027properties\u0027]?[\u0027additionalData\u0027]?[\u0027providerIncidentUrl\u0027])",
+                                                                                                                         "displayTimeZoneLabel":  "@parameters(\u0027displayTimeZoneLabel\u0027)"
+                                                                                                                     },
+                                                                                                          "runAfter":  {
+                                                                                                                           "Recent_comments":  [
+                                                                                                                                                   "Succeeded"
+                                                                                                                                               ]
+                                                                                                                       }
+                                                                                                      },
+                                                                                "Build_comment_elements":  {
+                                                                                                               "type":  "Select",
+                                                                                                               "inputs":  {
+                                                                                                                              "from":  "@outputs(\u0027Recent_comments\u0027)",
+                                                                                                                              "select":  {
+                                                                                                                                             "type":  "Container",
+                                                                                                                                             "separator":  true,
+                                                                                                                                             "spacing":  "Small",
+                                                                                                                                             "items":  [
+                                                                                                                                                           {
+                                                                                                                                                               "type":  "ColumnSet",
+                                                                                                                                                               "columns":  [
+                                                                                                                                                                               {
+                                                                                                                                                                                   "type":  "Column",
+                                                                                                                                                                                   "width":  "stretch",
+                                                                                                                                                                                   "items":  [
+                                                                                                                                                                                                 {
+                                                                                                                                                                                                     "type":  "TextBlock",
+                                                                                                                                                                                                     "text":  "@{item()?[\u0027author\u0027]}",
+                                                                                                                                                                                                     "weight":  "Bolder",
+                                                                                                                                                                                                     "wrap":  true
+                                                                                                                                                                                                 }
+                                                                                                                                                                                             ]
+                                                                                                                                                                               },
+                                                                                                                                                                               {
+                                                                                                                                                                                   "type":  "Column",
+                                                                                                                                                                                   "width":  "auto",
+                                                                                                                                                                                   "items":  [
+                                                                                                                                                                                                 {
+                                                                                                                                                                                                     "type":  "TextBlock",
+                                                                                                                                                                                                     "text":  "@{formatDateTime(item()?[\u0027createdTime\u0027], \u0027dd MMM yyyy, HH:mm\u0027)} UTC",
+                                                                                                                                                                                                     "size":  "Small",
+                                                                                                                                                                                                     "isSubtle":  true,
+                                                                                                                                                                                                     "horizontalAlignment":  "Right",
+                                                                                                                                                                                                     "wrap":  true
+                                                                                                                                                                                                 }
+                                                                                                                                                                                             ]
+                                                                                                                                                                               }
+                                                                                                                                                                           ]
+                                                                                                                                                           },
+                                                                                                                                                           {
+                                                                                                                                                               "type":  "TextBlock",
+                                                                                                                                                               "text":  "@{if(empty(item()?[\u0027message\u0027]), \u0027(Empty comment)\u0027, if(greater(length(item()?[\u0027message\u0027]), 500), concat(take(item()?[\u0027message\u0027], 500), \u0027…\u0027), item()?[\u0027message\u0027]))}",
+                                                                                                                                                               "wrap":  true,
+                                                                                                                                                               "spacing":  "Small"
+                                                                                                                                                           }
+                                                                                                                                                       ]
+                                                                                                                                         }
+                                                                                                                          },
+                                                                                                               "runAfter":  {
+                                                                                                                                "Recent_comments":  [
+                                                                                                                                                        "Succeeded"
+                                                                                                                                                    ]
+                                                                                                                            }
+                                                                                                           },
+                                                                                "Build_adaptive_card":  {
+                                                                                                            "type":  "Compose",
+                                                                                                            "inputs":  {
+                                                                                                                           "$schema":  "http://adaptivecards.io/schemas/adaptive-card.json",
+                                                                                                                           "type":  "AdaptiveCard",
+                                                                                                                           "version":  "1.5",
+                                                                                                                           "msteams":  {
+                                                                                                                                           "width":  "Full"
+                                                                                                                                       },
+                                                                                                                           "body":  [
+                                                                                                                                        {
+                                                                                                                                            "type":  "Container",
+                                                                                                                                            "style":  "emphasis",
+                                                                                                                                            "bleed":  true,
+                                                                                                                                            "items":  [
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "ColumnSet",
+                                                                                                                                                              "columns":  [
+                                                                                                                                                                              {
+                                                                                                                                                                                  "type":  "Column",
+                                                                                                                                                                                  "width":  "stretch",
+                                                                                                                                                                                  "items":  [
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "MICROSOFT SENTINEL",
+                                                                                                                                                                                                    "size":  "Small",
+                                                                                                                                                                                                    "weight":  "Bolder",
+                                                                                                                                                                                                    "color":  "Accent",
+                                                                                                                                                                                                    "spacing":  "None"
+                                                                                                                                                                                                },
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "INCIDENT CLOSED",
+                                                                                                                                                                                                    "size":  "Large",
+                                                                                                                                                                                                    "weight":  "Bolder",
+                                                                                                                                                                                                    "color":  "Good",
+                                                                                                                                                                                                    "spacing":  "Small"
+                                                                                                                                                                                                }
+                                                                                                                                                                                            ]
+                                                                                                                                                                              },
+                                                                                                                                                                              {
+                                                                                                                                                                                  "type":  "Column",
+                                                                                                                                                                                  "width":  "auto",
+                                                                                                                                                                                  "verticalContentAlignment":  "Center",
+                                                                                                                                                                                  "items":  [
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "#@{outputs(\u0027Prepare_card_data\u0027)?[\u0027incidentNumber\u0027]}",
+                                                                                                                                                                                                    "weight":  "Bolder",
+                                                                                                                                                                                                    "horizontalAlignment":  "Right",
+                                                                                                                                                                                                    "wrap":  true
+                                                                                                                                                                                                },
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027workspaceName\u0027]}",
+                                                                                                                                                                                                    "size":  "Small",
+                                                                                                                                                                                                    "isSubtle":  true,
+                                                                                                                                                                                                    "horizontalAlignment":  "Right",
+                                                                                                                                                                                                    "wrap":  true,
+                                                                                                                                                                                                    "spacing":  "None"
+                                                                                                                                                                                                }
+                                                                                                                                                                                            ]
+                                                                                                                                                                              }
+                                                                                                                                                                          ]
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "TextBlock",
+                                                                                                                                                              "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027title\u0027]}",
+                                                                                                                                                              "size":  "ExtraLarge",
+                                                                                                                                                              "weight":  "Bolder",
+                                                                                                                                                              "wrap":  true,
+                                                                                                                                                              "spacing":  "Medium"
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "ColumnSet",
+                                                                                                                                                              "spacing":  "Medium",
+                                                                                                                                                              "columns":  [
+                                                                                                                                                                              {
+                                                                                                                                                                                  "type":  "Column",
+                                                                                                                                                                                  "width":  "stretch",
+                                                                                                                                                                                  "items":  [
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "SEVERITY",
+                                                                                                                                                                                                    "size":  "Small",
+                                                                                                                                                                                                    "isSubtle":  true
+                                                                                                                                                                                                },
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027severity\u0027]}",
+                                                                                                                                                                                                    "weight":  "Bolder",
+                                                                                                                                                                                                    "color":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027severityColor\u0027]}",
+                                                                                                                                                                                                    "spacing":  "None"
+                                                                                                                                                                                                }
+                                                                                                                                                                                            ]
+                                                                                                                                                                              },
+                                                                                                                                                                              {
+                                                                                                                                                                                  "type":  "Column",
+                                                                                                                                                                                  "width":  "stretch",
+                                                                                                                                                                                  "items":  [
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "CLASSIFICATION",
+                                                                                                                                                                                                    "size":  "Small",
+                                                                                                                                                                                                    "isSubtle":  true
+                                                                                                                                                                                                },
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027classification\u0027]}",
+                                                                                                                                                                                                    "weight":  "Bolder",
+                                                                                                                                                                                                    "wrap":  true,
+                                                                                                                                                                                                    "spacing":  "None"
+                                                                                                                                                                                                }
+                                                                                                                                                                                            ]
+                                                                                                                                                                              },
+                                                                                                                                                                              {
+                                                                                                                                                                                  "type":  "Column",
+                                                                                                                                                                                  "width":  "stretch",
+                                                                                                                                                                                  "items":  [
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "TIME TO CLOSE",
+                                                                                                                                                                                                    "size":  "Small",
+                                                                                                                                                                                                    "isSubtle":  true
+                                                                                                                                                                                                },
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027duration\u0027]}",
+                                                                                                                                                                                                    "weight":  "Bolder",
+                                                                                                                                                                                                    "wrap":  true,
+                                                                                                                                                                                                    "spacing":  "None"
+                                                                                                                                                                                                }
+                                                                                                                                                                                            ]
+                                                                                                                                                                              }
+                                                                                                                                                                          ]
+                                                                                                                                                          }
+                                                                                                                                                      ]
+                                                                                                                                        },
+                                                                                                                                        {
+                                                                                                                                            "type":  "Container",
+                                                                                                                                            "separator":  true,
+                                                                                                                                            "spacing":  "Medium",
+                                                                                                                                            "items":  [
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "TextBlock",
+                                                                                                                                                              "text":  "EXECUTIVE CLOSURE SUMMARY",
+                                                                                                                                                              "weight":  "Bolder",
+                                                                                                                                                              "color":  "Accent"
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "TextBlock",
+                                                                                                                                                              "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027managementSummary\u0027]}",
+                                                                                                                                                              "wrap":  true,
+                                                                                                                                                              "size":  "Medium"
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "TextBlock",
+                                                                                                                                                              "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027summaryQuality\u0027]}",
+                                                                                                                                                              "size":  "Small",
+                                                                                                                                                              "weight":  "Bolder",
+                                                                                                                                                              "color":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027summaryQualityColor\u0027]}",
+                                                                                                                                                              "wrap":  true,
+                                                                                                                                                              "spacing":  "Small"
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "FactSet",
+                                                                                                                                                              "spacing":  "Medium",
+                                                                                                                                                              "facts":  [
+                                                                                                                                                                            {
+                                                                                                                                                                                "title":  "Closure reason:",
+                                                                                                                                                                                "value":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027reason\u0027]}"
+                                                                                                                                                                            },
+                                                                                                                                                                            {
+                                                                                                                                                                                "title":  "Assigned analyst:",
+                                                                                                                                                                                "value":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027owner\u0027]}"
+                                                                                                                                                                            },
+                                                                                                                                                                            {
+                                                                                                                                                                                "title":  "Closed by (reported):",
+                                                                                                                                                                                "value":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027closedBy\u0027]}"
+                                                                                                                                                                            },
+                                                                                                                                                                            {
+                                                                                                                                                                                "title":  "Closed (@{outputs(\u0027Prepare_card_data\u0027)?[\u0027displayTimeZoneLabel\u0027]}):",
+                                                                                                                                                                                "value":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027closedTimeLocal\u0027]}"
+                                                                                                                                                                            }
+                                                                                                                                                                        ]
+                                                                                                                                                          }
+                                                                                                                                                      ]
+                                                                                                                                        },
+                                                                                                                                        {
+                                                                                                                                            "type":  "Container",
+                                                                                                                                            "separator":  true,
+                                                                                                                                            "spacing":  "Medium",
+                                                                                                                                            "items":  [
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "TextBlock",
+                                                                                                                                                              "text":  "INCIDENT OVERVIEW",
+                                                                                                                                                              "weight":  "Bolder",
+                                                                                                                                                              "color":  "Accent"
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "TextBlock",
+                                                                                                                                                              "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027description\u0027]}",
+                                                                                                                                                              "wrap":  true
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "ColumnSet",
+                                                                                                                                                              "spacing":  "Medium",
+                                                                                                                                                              "columns":  [
+                                                                                                                                                                              {
+                                                                                                                                                                                  "type":  "Column",
+                                                                                                                                                                                  "width":  "stretch",
+                                                                                                                                                                                  "items":  [
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "ALERTS",
+                                                                                                                                                                                                    "size":  "Small",
+                                                                                                                                                                                                    "isSubtle":  true
+                                                                                                                                                                                                },
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027alertCount\u0027]}",
+                                                                                                                                                                                                    "weight":  "Bolder",
+                                                                                                                                                                                                    "spacing":  "None"
+                                                                                                                                                                                                }
+                                                                                                                                                                                            ]
+                                                                                                                                                                              },
+                                                                                                                                                                              {
+                                                                                                                                                                                  "type":  "Column",
+                                                                                                                                                                                  "width":  "stretch",
+                                                                                                                                                                                  "items":  [
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "COMMENTS",
+                                                                                                                                                                                                    "size":  "Small",
+                                                                                                                                                                                                    "isSubtle":  true
+                                                                                                                                                                                                },
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027commentCount\u0027]}",
+                                                                                                                                                                                                    "weight":  "Bolder",
+                                                                                                                                                                                                    "spacing":  "None"
+                                                                                                                                                                                                }
+                                                                                                                                                                                            ]
+                                                                                                                                                                              },
+                                                                                                                                                                              {
+                                                                                                                                                                                  "type":  "Column",
+                                                                                                                                                                                  "width":  "stretch",
+                                                                                                                                                                                  "items":  [
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "CREATED",
+                                                                                                                                                                                                    "size":  "Small",
+                                                                                                                                                                                                    "isSubtle":  true
+                                                                                                                                                                                                },
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    "type":  "TextBlock",
+                                                                                                                                                                                                    "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027createdTimeLocal\u0027]} @{outputs(\u0027Prepare_card_data\u0027)?[\u0027displayTimeZoneLabel\u0027]}",
+                                                                                                                                                                                                    "weight":  "Bolder",
+                                                                                                                                                                                                    "wrap":  true,
+                                                                                                                                                                                                    "spacing":  "None"
+                                                                                                                                                                                                }
+                                                                                                                                                                                            ]
+                                                                                                                                                                              }
+                                                                                                                                                                          ]
+                                                                                                                                                          }
+                                                                                                                                                      ]
+                                                                                                                                        },
+                                                                                                                                        {
+                                                                                                                                            "type":  "Container",
+                                                                                                                                            "id":  "investigationDetails",
+                                                                                                                                            "isVisible":  false,
+                                                                                                                                            "separator":  true,
+                                                                                                                                            "spacing":  "Medium",
+                                                                                                                                            "items":  [
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "TextBlock",
+                                                                                                                                                              "text":  "INVESTIGATION AND AUDIT DETAILS",
+                                                                                                                                                              "weight":  "Bolder",
+                                                                                                                                                              "color":  "Accent"
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "FactSet",
+                                                                                                                                                              "facts":  [
+                                                                                                                                                                            {
+                                                                                                                                                                                "title":  "Incident GUID:",
+                                                                                                                                                                                "value":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027incidentGuid\u0027]}"
+                                                                                                                                                                            },
+                                                                                                                                                                            {
+                                                                                                                                                                                "title":  "Created (UTC):",
+                                                                                                                                                                                "value":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027createdTimeUtc\u0027]}"
+                                                                                                                                                                            },
+                                                                                                                                                                            {
+                                                                                                                                                                                "title":  "Closed (UTC):",
+                                                                                                                                                                                "value":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027closedTimeUtc\u0027]}"
+                                                                                                                                                                            },
+                                                                                                                                                                            {
+                                                                                                                                                                                "title":  "Trigger update (UTC):",
+                                                                                                                                                                                "value":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027triggerTimeUtc\u0027]}"
+                                                                                                                                                                            },
+                                                                                                                                                                            {
+                                                                                                                                                                                "title":  "First retained closed update (UTC):",
+                                                                                                                                                                                "value":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027firstLoggedUpdateUtc\u0027]}"
+                                                                                                                                                                            }
+                                                                                                                                                                        ]
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "TextBlock",
+                                                                                                                                                              "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027closureStatus\u0027]}",
+                                                                                                                                                              "size":  "Small",
+                                                                                                                                                              "isSubtle":  true,
+                                                                                                                                                              "wrap":  true
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "TextBlock",
+                                                                                                                                                              "text":  "LATEST ANALYST COMMENTS",
+                                                                                                                                                              "weight":  "Bolder",
+                                                                                                                                                              "spacing":  "Medium"
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "TextBlock",
+                                                                                                                                                              "text":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027commentsStatus\u0027]}",
+                                                                                                                                                              "size":  "Small",
+                                                                                                                                                              "isSubtle":  true,
+                                                                                                                                                              "wrap":  true,
+                                                                                                                                                              "spacing":  "Small"
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "Container",
+                                                                                                                                                              "items":  "@body(\u0027Build_comment_elements\u0027)"
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                              "type":  "TextBlock",
+                                                                                                                                                              "text":  "Comments are fetched when this notification runs and are not an immutable closure snapshot. Common formatting tags are removed on a best-effort basis. Open the incident for complete evidence and history.",
+                                                                                                                                                              "size":  "Small",
+                                                                                                                                                              "isSubtle":  true,
+                                                                                                                                                              "wrap":  true,
+                                                                                                                                                              "spacing":  "Medium"
+                                                                                                                                                          }
+                                                                                                                                                      ]
+                                                                                                                                        }
+                                                                                                                                    ],
+                                                                                                                           "actions":  [
+                                                                                                                                           {
+                                                                                                                                               "type":  "Action.ToggleVisibility",
+                                                                                                                                               "title":  "Show / hide investigation details",
+                                                                                                                                               "targetElements":  [
+                                                                                                                                                                      "investigationDetails"
+                                                                                                                                                                  ]
+                                                                                                                                           },
+                                                                                                                                           {
+                                                                                                                                               "type":  "Action.OpenUrl",
+                                                                                                                                               "title":  "Open incident in Microsoft Sentinel",
+                                                                                                                                               "url":  "@{outputs(\u0027Prepare_card_data\u0027)?[\u0027incidentUrl\u0027]}"
+                                                                                                                                           }
+                                                                                                                                       ]
+                                                                                                                       },
+                                                                                                            "runAfter":  {
+                                                                                                                             "Prepare_card_data":  [
+                                                                                                                                                       "Succeeded"
+                                                                                                                                                   ],
+                                                                                                                             "Build_comment_elements":  [
+                                                                                                                                                            "Succeeded"
+                                                                                                                                                        ]
+                                                                                                                         }
+                                                                                                        },
+                                                                                "Post_card_in_a_chat_or_channel":  {
+                                                                                                                       "type":  "ApiConnection",
+                                                                                                                       "inputs":  {
+                                                                                                                                      "host":  {
+                                                                                                                                                   "connection":  {
+                                                                                                                                                                      "name":  "@parameters(\u0027$connections\u0027)[\u0027teams\u0027][\u0027connectionId\u0027]"
+                                                                                                                                                                  }
+                                                                                                                                               },
+                                                                                                                                      "method":  "post",
+                                                                                                                                      "body":  {
+                                                                                                                                                   "recipient":  {
+                                                                                                                                                                     "groupId":  "@parameters(\u0027teamsTeamId\u0027)",
+                                                                                                                                                                     "channelId":  "@parameters(\u0027teamsChannelId\u0027)"
+                                                                                                                                                                 },
+                                                                                                                                                   "messageBody":  "@string(outputs(\u0027Build_adaptive_card\u0027))"
+                                                                                                                                               },
+                                                                                                                                      "path":  "/v1.0/teams/conversation/adaptivecard/poster/@{encodeURIComponent(\u0027Flow bot\u0027)}/location/@{encodeURIComponent(\u0027Channel\u0027)}"
+                                                                                                                                  },
+                                                                                                                       "runAfter":  {
+                                                                                                                                        "Build_adaptive_card":  [
+                                                                                                                                                                    "Succeeded"
+                                                                                                                                                                ]
+                                                                                                                                    }
+                                                                                                                   }
+                                                                            },
+                                                                "parameters":  {
+                                                                                   "$connections":  {
+                                                                                                        "type":  "Object",
+                                                                                                        "defaultValue":  {
+
+                                                                                                                         }
+                                                                                                    },
+                                                                                   "logAnalyticsWorkspaceId":  {
+                                                                                                                   "type":  "String",
+                                                                                                                   "metadata":  {
+                                                                                                                                    "description":  "Log Analytics Customer ID supplied by the deployment from the existing workspace resource."
+                                                                                                                                }
+                                                                                                               },
+                                                                                   "displayTimeZone":  {
+                                                                                                           "type":  "String",
+                                                                                                           "defaultValue":  "UTC",
+                                                                                                           "metadata":  {
+                                                                                                                            "description":  "Windows time-zone ID used for management-facing timestamps, for example India Standard Time or UTC."
+                                                                                                                        }
+                                                                                                       },
+                                                                                   "displayTimeZoneLabel":  {
+                                                                                                                "type":  "String",
+                                                                                                                "defaultValue":  "UTC",
+                                                                                                                "metadata":  {
+                                                                                                                                 "description":  "Short label displayed beside converted timestamps. Keep aligned with displayTimeZone."
+                                                                                                                             }
+                                                                                                            },
+                                                                                   "teamsTeamId":  {
+                                                                                                       "metadata":  {
+                                                                                                                        "description":  "Microsoft Teams team (Microsoft 365 group) ID."
+                                                                                                                    },
+                                                                                                       "type":  "String"
+                                                                                                   },
+                                                                                   "teamsChannelId":  {
+                                                                                                          "metadata":  {
+                                                                                                                           "description":  "Microsoft Teams channel ID, not its display name or full URL."
+                                                                                                                       },
+                                                                                                          "type":  "String"
+                                                                                                      }
+                                                                               }
+                                                            },
+                                             "parameters":  {
+                                                                "logAnalyticsWorkspaceId":  {
+                                                                                                "value":  "[reference(parameters(\u0027logAnalyticsWorkspaceResourceId\u0027), \u00272023-09-01\u0027).customerId]"
+                                                                                            },
+                                                                "teamsTeamId":  {
+                                                                                    "value":  "[parameters(\u0027teamsTeamId\u0027)]"
+                                                                                },
+                                                                "teamsChannelId":  {
+                                                                                       "value":  "[parameters(\u0027teamsChannelId\u0027)]"
+                                                                                   },
+                                                                "displayTimeZone":  {
+                                                                                        "value":  "[parameters(\u0027displayTimeZone\u0027)]"
+                                                                                    },
+                                                                "displayTimeZoneLabel":  {
+                                                                                             "value":  "[parameters(\u0027displayTimeZoneLabel\u0027)]"
+                                                                                         },
+                                                                "$connections":  {
+                                                                                     "value":  {
+                                                                                                   "azuresentinel":  {
+                                                                                                                         "connectionName":  "[variables(\u0027sentinelConnectionName\u0027)]",
+                                                                                                                         "connectionId":  "[resourceId(\u0027Microsoft.Web/connections\u0027, variables(\u0027sentinelConnectionName\u0027))]",
+                                                                                                                         "id":  "[variables(\u0027sentinelManagedApiId\u0027)]",
+                                                                                                                         "connectionProperties":  {
+                                                                                                                                                      "authentication":  {
+                                                                                                                                                                             "type":  "ManagedServiceIdentity"
+                                                                                                                                                                         }
+                                                                                                                                                  }
+                                                                                                                     },
+                                                                                                   "teams":  {
+                                                                                                                 "connectionName":  "[variables(\u0027teamsConnectionName\u0027)]",
+                                                                                                                 "connectionId":  "[resourceId(\u0027Microsoft.Web/connections\u0027, variables(\u0027teamsConnectionName\u0027))]",
+                                                                                                                 "id":  "[variables(\u0027teamsManagedApiId\u0027)]",
+                                                                                                                 "connectionProperties":  {
+
+                                                                                                                                          }
+                                                                                                             }
+                                                                                               }
+                                                                                 }
+                                                            }
+                                         }
+                      }
+                  ],
+    "outputs":  {
+                    "logicAppResourceId":  {
+                                               "value":  "[resourceId(\u0027Microsoft.Logic/workflows\u0027, parameters(\u0027logicAppName\u0027))]",
+                                               "type":  "string"
+                                           },
+                    "managedIdentityPrincipalId":  {
+                                                       "value":  "[reference(resourceId(\u0027Microsoft.Logic/workflows\u0027, parameters(\u0027logicAppName\u0027)), \u00272019-05-01\u0027, \u0027Full\u0027).identity.principalId]",
+                                                       "type":  "string"
+                                                   },
+                    "sentinelConnectionName":  {
+                                                   "value":  "[variables(\u0027sentinelConnectionName\u0027)]",
+                                                   "type":  "string"
+                                               },
+                    "teamsConnectionName":  {
+                                                "value":  "[variables(\u0027teamsConnectionName\u0027)]",
+                                                "type":  "string"
+                                            },
+                    "workspaceResourceId":  {
+                                                "value":  "[parameters(\u0027logAnalyticsWorkspaceResourceId\u0027)]",
+                                                "type":  "string"
+                                            }
+                }
+}

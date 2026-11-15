@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "logicAppName": {
+      "value": "sentinel-closed-incident-teams"
+    },
+    "location": {
+      "value": "eastus"
+    },
+    "logAnalyticsWorkspaceResourceId": {
+      "value": "/subscriptions/<workspace-subscription-id>/resourceGroups/<workspace-resource-group>/providers/Microsoft.OperationalInsights/workspaces/<workspace-name>"
+    },
+    "teamsTeamId": {
+      "value": "<team-guid>"
+    },
+    "teamsChannelId": {
+      "value": "<url-decoded-standard-channel-id>"
+    },
+    "displayTimeZone": {
+      "value": "UTC"
+    },
+    "displayTimeZoneLabel": {
+      "value": "UTC"
+    },
+    "workflowState": {
+      "value": "Disabled"
+    }
+  }
+}
