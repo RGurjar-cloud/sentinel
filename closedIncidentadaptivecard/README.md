@@ -221,6 +221,56 @@ If entering the connection references individually rather than copying the objec
 
 Keep the Sentinel entry's `connectionProperties.authentication.type` set to `ManagedServiceIdentity`. Do not paste credentials, tokens, or secrets into this file. Leave the workflow expressions and the parameter declarations inside `definition.parameters` unchanged.
 
+#### Example: code-view parameters
+
+The following uses **fictional IDs and resource names** for a Logic App and both connections in `eastus`, with timestamps displayed in IST. Replace these values with your own; example connections do not exist.
+
+In [logic app workflowcode.json](./logic%20app%20workflowcode.json), replace only the **outer `parameters` object**, alongside `definition`, with the object shown below. Keep the existing `definition` object. This snippet is not a complete workflow.
+
+```json
+{
+  "parameters": {
+    "logAnalyticsWorkspaceId": {
+      "value": "11111111-1111-4111-8111-111111111111"
+    },
+    "teamsTeamId": {
+      "value": "22222222-2222-4222-8222-222222222222"
+    },
+    "teamsChannelId": {
+      "value": "19:examplechannelid@thread.tacv2"
+    },
+    "displayTimeZone": {
+      "value": "India Standard Time"
+    },
+    "displayTimeZoneLabel": {
+      "value": "IST"
+    },
+    "$connections": {
+      "value": {
+        "azuresentinel": {
+          "connectionName": "sentinel-closed-incident-teams-sentinel",
+          "connectionId": "/subscriptions/33333333-3333-4333-8333-333333333333/resourceGroups/rg-sentinel-playbooks/providers/Microsoft.Web/connections/sentinel-closed-incident-teams-sentinel",
+          "id": "/subscriptions/33333333-3333-4333-8333-333333333333/providers/Microsoft.Web/locations/eastus/managedApis/azuresentinel",
+          "connectionProperties": {
+            "authentication": {
+              "type": "ManagedServiceIdentity"
+            }
+          }
+        },
+        "teams": {
+          "connectionName": "sentinel-closed-incident-teams-teams",
+          "connectionId": "/subscriptions/33333333-3333-4333-8333-333333333333/resourceGroups/rg-sentinel-playbooks/providers/Microsoft.Web/connections/sentinel-closed-incident-teams-teams",
+          "id": "/subscriptions/33333333-3333-4333-8333-333333333333/providers/Microsoft.Web/locations/eastus/managedApis/teams",
+          "connectionProperties": {}
+        }
+      }
+    }
+  }
+}
+```
+
+Here, `11111111-...` is the workspace **Customer ID**, `22222222-...` is the **Teams team ID**, and `33333333-...` is the **Azure subscription ID**. These are different identifiers. Copy the real connection references from your saved Logic App rather than guessing their resource names.
+
 1. Confirm that no `<...>` placeholders remain.
 2. Replace the entire **Logic app code view** contents with your edited JSON and select **Save**.
 3. Open the designer and confirm that the Sentinel trigger and Teams action resolve to the intended connections.
@@ -244,6 +294,31 @@ The portal collects these values when you deploy. A parameter file is **not requ
 | `workflowState` | `Disabled` | Keep disabled until setup is complete. Allowed values: `Disabled`, `Enabled`. |
 
 For repeatable parameter planning, see [azuredeploy.parameters.example.json](./azuredeploy.parameters.example.json). Replace all placeholders before using it in a deployment process.
+
+### Example: ARM deployment parameters
+
+For the ARM deployment route, this is a complete example parameter file using the same **fictional environment** as above. Unlike code view, ARM takes the workspace's **resource ID** and resolves its Customer ID automatically. Do not paste this parameter file into Logic app code view.
+
+```json
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "logicAppName": { "value": "sentinel-closed-incident-teams" },
+    "location": { "value": "eastus" },
+    "logAnalyticsWorkspaceResourceId": {
+      "value": "/subscriptions/33333333-3333-4333-8333-333333333333/resourceGroups/rg-sentinel/providers/Microsoft.OperationalInsights/workspaces/law-sentinel-prod"
+    },
+    "teamsTeamId": { "value": "22222222-2222-4222-8222-222222222222" },
+    "teamsChannelId": { "value": "19:examplechannelid@thread.tacv2" },
+    "displayTimeZone": { "value": "India Standard Time" },
+    "displayTimeZoneLabel": { "value": "IST" },
+    "workflowState": { "value": "Disabled" }
+  }
+}
+```
+
+When using **Deploy to Azure**, enter these example values with your own IDs and names substituted into the corresponding portal fields; you do not need to upload a parameter file.
 
 ## Troubleshooting
 
