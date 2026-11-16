@@ -19,6 +19,7 @@ Deploy the Azure Resource Manager (ARM) template, connect your Teams destination
 - [Overview](#overview)
 - [Before you deploy](#before-you-deploy)
 - [Deploy and configure](#deploy-and-configure)
+- [Copy-paste into an existing Logic App](#copy-paste-into-an-existing-logic-app)
 - [Deployment parameters](#deployment-parameters)
 - [Troubleshooting](#troubleshooting)
 - [Repository contents](#repository-contents)
@@ -181,6 +182,52 @@ Close a fresh test incident and confirm that the automation rule invokes the pla
 - [ ] An automation-rule test posts a notification when an incident changes to Closed.
 - [ ] Channel membership, connection ownership, and failure monitoring meet your organization's requirements.
 
+## Copy-paste into an existing Logic App
+
+Use [logic app workflowcode.json](./logic%20app%20workflowcode.json) instead of the ARM template when you want to configure resources manually. It contains the same incident trigger, processing actions, and Adaptive Card in the **Consumption Logic App > Logic app code view** format (`definition` and `parameters`). It is not an ARM deployment template or a Standard Logic App `workflow.json`.
+
+### Prepare the Logic App and connections
+
+1. Create a blank **Consumption** Logic App in Azure public cloud, or use a dedicated existing one. Disable it during setup. Back up any existing code: pasting this file replaces the current workflow.
+2. Under **Identity > System assigned**, turn the identity **On** and save.
+3. In the designer, add the **Microsoft Sentinel incident** trigger and create a Sentinel API connection using **Managed identity** with the system-assigned identity.
+4. Add a Microsoft Teams **Post card in a chat or channel** action and create/authorize its API connection with your licensed Teams account. If necessary to save this temporary setup, select **Flow bot**, **Channel**, a destination, and a valid sample Adaptive Card. Keep the workflow disabled.
+5. Save, open **Logic app code view**, and copy the outer `parameters.$connections.value` object. These are references to real API connections; the workflow JSON does not create or authorize connections. Keep the aliases `azuresentinel` and `teams` used in the supplied file. If the designer generated different aliases, copy each connection's contents under the corresponding supplied alias.
+
+Existing compatible connections can be reused instead. The Sentinel connection must support managed-identity authentication, and the Teams connection must be authorized. Prefer connections in the Logic App's subscription and region.
+
+### Fill in the JSON and paste
+
+Open [logic app workflowcode.json](./logic%20app%20workflowcode.json) locally and edit the outer `parameters` values near the bottom:
+
+| Value / placeholder | Enter manually |
+|---|---|
+| `logAnalyticsWorkspaceId.value`: `<workspace-customer-id-guid>` | The source workspace's **Workspace ID / Customer ID GUID**, found under Log Analytics workspace **Properties**. Unlike the ARM template input, this is **not** the workspace ARM resource ID. |
+| `teamsTeamId.value`: `<teams-team-guid>` | Destination team's `groupId` GUID. |
+| `teamsChannelId.value`: `<url-decoded-standard-channel-id>` | Destination standard-channel ID, for example `19:...@thread.tacv2`, URL-decoded. |
+| `displayTimeZone.value` | Keep `UTC`, or enter a Windows time-zone ID such as `India Standard Time`. |
+| `displayTimeZoneLabel.value` | Keep `UTC`, or use a matching label such as `IST`. |
+| `$connections.value` | Replace the entire object with the two real connection references collected above, retaining aliases `azuresentinel` and `teams`. This replaces all connection placeholders below. |
+
+If entering the connection references individually rather than copying the object:
+
+| Connection placeholder | Required value |
+|---|---|
+| `<logic-app-subscription-id>` | Subscription GUID used in the API connection and managed API resource IDs. |
+| `<connection-resource-group>` | Resource group containing the relevant API connection. |
+| `<logic-app-region>` | Azure region name such as `eastus`, not a display name. |
+| `<sentinel-connection-name>` | Existing managed-identity Sentinel API connection resource name, in both `connectionName` and `connectionId`. |
+| `<teams-connection-name>` | Existing authorized Teams API connection resource name, in both `connectionName` and `connectionId`. |
+
+Keep the Sentinel entry's `connectionProperties.authentication.type` set to `ManagedServiceIdentity`. Do not paste credentials, tokens, or secrets into this file. Leave the workflow expressions and the parameter declarations inside `definition.parameters` unchanged.
+
+1. Confirm that no `<...>` placeholders remain.
+2. Replace the entire **Logic app code view** contents with your edited JSON and select **Save**.
+3. Open the designer and confirm that the Sentinel trigger and Teams action resolve to the intended connections.
+4. Complete [Step 3](#3-grant-the-managed-identity-workspace-access) through [Step 7](#7-enable-automatic-closure-notifications) above: grant workspace roles, verify Teams authorization, grant Sentinel permission to invoke the playbook, then enable and test it before adding the automation rule.
+
+**Important:** code view does not provision the managed identity, API connections, RBAC assignments, or Sentinel automation rule, and it does not set the Logic App's enabled/disabled state. Those are manual setup steps. The ARM deployment and this copy-paste workflow have the same runtime behavior once configured.
+
 ## Deployment parameters
 
 The portal collects these values when you deploy. A parameter file is **not required** for the button-based deployment.
@@ -220,6 +267,7 @@ For repeatable parameter planning, see [azuredeploy.parameters.example.json](./a
 |---|---|
 | [azuredeploy.json](./azuredeploy.json) | Deployable ARM template containing the Logic App, managed identity configuration, two API connections, and embedded Adaptive Card. |
 | [azuredeploy.parameters.example.json](./azuredeploy.parameters.example.json) | Example deployment parameters with placeholders for your environment. |
+| [logic app workflowcode.json](./logic%20app%20workflowcode.json) | Standalone Consumption Logic App code-view JSON with manual workspace, Teams, time-zone, and API connection configuration. |
 | [Workflow_card_sample.png](./Workflow_card_sample.png) | Example Teams notification shown in this guide. |
 | [README.md](./README.md) | Deployment, configuration, permissions, and operations guide. |
 
