@@ -182,6 +182,16 @@
 
                                                                                                                   }
                                                                                                  },
+                                                                                "Delay_before_closure_query":  {
+                                                                                                                   "type":  "Wait",
+                                                                                                                   "inputs":  {
+                                                                                                                                  "interval":  {
+                                                                                                                                                   "count":  10,
+                                                                                                                                                   "unit":  "Minute"
+                                                                                                                                               }
+                                                                                                                              },
+                                                                                                                   "runAfter":  {}
+                                                                                                               },
                                                                                 "Query_closure_data":  {
                                                                                                            "type":  "Http",
                                                                                                            "inputs":  {
@@ -199,7 +209,9 @@
                                                                                                                                              }
                                                                                                                       },
                                                                                                            "runAfter":  {
-
+                                                                                                                            "Delay_before_closure_query":  [
+                                                                                                                                                               "Succeeded"
+                                                                                                                                                           ]
                                                                                                                         }
                                                                                                        },
                                                                                 "Parse_fetched_data":  {

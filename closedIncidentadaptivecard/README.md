@@ -153,7 +153,7 @@ This is separate from the Logic App identity's workspace permissions in Step 3. 
 
 Verify the destination, incident link, summary, classification, owner, comment order, and time-zone display. Expand the investigation section and check its timestamps and data-quality notes.
 
-If the exact incident-history update has not yet been ingested, closure-derived values can be unavailable even when the run succeeds. The card should explain this rather than infer a value.
+The workflow waits **10 minutes before querying closure history** to allow time for Log Analytics ingestion, so Teams delivery takes approximately 10 minutes plus processing time. This applies to automatic and manual incident runs. If the exact incident-history update has still not been ingested, closure-derived values can be unavailable even when the run succeeds. The card should explain this rather than infer a value; the delay is not an ingestion guarantee.
 
 For manual incident runs, the operator needs incident access such as **Microsoft Sentinel Responder**, plus **Microsoft Sentinel Playbook Operator** on the playbook, or suitable broader permissions. Start the test from a Sentinel incident, not a blank Logic App run: the workflow needs an incident payload.
 
@@ -357,7 +357,8 @@ Expand the sections below for architecture, detailed permissions, and operationa
 flowchart LR
     S["Sentinel automation rule or manual incident run"] --> T["Incident trigger: status Closed"]
     T --> C["Get incident comments using managed identity"]
-    T --> Q["Query SecurityIncident using managed identity"]
+    T --> D["Wait 10 minutes for closure-history ingestion"]
+    D --> Q["Query SecurityIncident using managed identity"]
     C --> P["Parse responses and prepare card data"]
     Q --> P
     P --> A["Build Adaptive Card"]
@@ -365,7 +366,7 @@ flowchart LR
 ```
 
 1. The Sentinel incident trigger accepts a supplied incident payload. A trigger condition allows only snapshots whose status is `Closed`.
-2. Two HTTP actions run in parallel: one reads incident comments through Azure Resource Manager; the other queries the Log Analytics Query API.
+2. Two branches start in parallel: one reads incident comments through Azure Resource Manager immediately; the other waits 10 minutes, then queries the Log Analytics Query API. There is no polling or retry for an empty query result.
 3. The workflow parses the responses, sorts comments newest first, and selects the latest three.
 4. It prepares the card data, converts display timestamps, and builds an Adaptive Card version 1.5.
 5. The Teams connector posts the card as **Flow bot** to the configured channel.
